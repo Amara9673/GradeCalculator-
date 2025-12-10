@@ -1,12 +1,16 @@
 #include <gtk/gtk.h>
 #include <string>
+#include <fstream>
 #include "authentication.h"
+
+// pointer to textview which will show the file and whats inside of it
+static GtkWidget *fileview = NULL;
 
 // This function pops up a login window.
 // It keeps asking for a username and password until:
 //   1) the user enters valid info  -> returns true
 //   2) the user hits Cancel / closes the dialog -> returns false
-bool show_login_dialog(GtkWindow *parent)
+bool showlogindialog(GtkWindow *parent)
 {
     bool loggedIn = false;   // will become true only if loginCheck passes
     bool done     = false;   // controls the while loop
@@ -122,44 +126,112 @@ bool show_login_dialog(GtkWindow *parent)
 
 // This function runs when the button in the main window gets clicked.
 // Right now it just prints a message to the terminal.
-static void on_button_clicked(GtkButton *button, gpointer user_data)
+static void clickbutton(GtkButton *btn, gpointer data)
 {
     g_print("Button was clicked!\n");
 }
 
+// callback for the "Open Scores File" button
+static void openfile(GtkButton *btn, gpointer data)
+{
+    GtkWidget *dialog = gtk_file_chooser_dialog_new(
+        "Open Scores File",
+        NULL,
+        GTK_FILE_CHOOSER_ACTION_OPEN,
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        "_Open", GTK_RESPONSE_ACCEPT,
+        NULL);
+
+    gint res = gtk_dialog_run(GTK_DIALOG(dialog));
+
+    if (res == GTK_RESPONSE_ACCEPT)
+    {
+        // get the selected file path
+        char *filename = gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+
+        // read file into a C++ string
+        std::ifstream file(filename);
+        std::string line, contents;
+
+        if (file)
+        {
+            while (std::getline(file, line))
+            {
+                contents += line + "\n";
+            }
+        }
+        else
+        {
+            contents = "Error: Could not open file.";
+        }
+
+        // show file contents in the TextView
+        if (fileview != NULL)
+        {
+            GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(fileview));
+            gtk_text_buffer_set_text(buffer, contents.c_str(), -1);
+        }
+
+        g_free(filename);
+    }
+
+    gtk_widget_destroy(dialog);
+}
+
 // This is the startup function for the GTK app.
 // It creates the main window and sets up the widgets inside it.
-static void activate(GtkApplication *app, gpointer user_data)
+static void startapp(GtkApplication *app, gpointer data)
 {
     // create the main window
     GtkWidget *window = gtk_application_window_new(app);
     gtk_window_set_title(GTK_WINDOW(window), "Grade Calculator Practice");
-    gtk_window_set_default_size(GTK_WINDOW(window), 400, 200);
+    gtk_window_set_default_size(GTK_WINDOW(window), 800, 500);
 
     // before showing the main window, force the user to log in
-    if (!show_login_dialog(GTK_WINDOW(window)))
+    if (!showlogindialog(GTK_WINDOW(window)))
     {
-        // if show_login_dialog returned false, user failed/exited so we just quit the program
-        // i think we could put something funny here. like an image or smthn when they get the login wrong
         g_application_quit(G_APPLICATION(app));
         return;
     }
 
-    // main vertical box to organize everything inside the window
-    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    gtk_container_set_border_width(GTK_CONTAINER(vbox), 20);
+    // main horizontal box (sidebar on left, content on right)
+    GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_container_set_border_width(GTK_CONTAINER(hbox), 20);
 
-    // simple label at the top of the window
-    GtkWidget *label = gtk_label_new("Welcome to Grade Calculator");
-    gtk_box_pack_start(GTK_BOX(vbox), label, FALSE, FALSE, 5);
+    // left sidebar
+    GtkWidget *sidebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
 
-    // button the user can click (for now it just prints to the terminal)
+    // button to open a scores file
+    GtkWidget *openbtn = gtk_button_new_with_label("Open Scores File");
+    g_signal_connect(openbtn, "clicked", G_CALLBACK(openfile), NULL);
+    gtk_box_pack_start(GTK_BOX(sidebar), openbtn, FALSE, FALSE, 5);
+
+    // your original button (kept)
     GtkWidget *button = gtk_button_new_with_label("Click Me");
-    g_signal_connect(button, "clicked", G_CALLBACK(on_button_clicked), NULL);
-    gtk_box_pack_start(GTK_BOX(vbox), button, FALSE, FALSE, 5);
+    g_signal_connect(button, "clicked", G_CALLBACK(clickbutton), NULL);
+    gtk_box_pack_start(GTK_BOX(sidebar), button, FALSE, FALSE, 5);
 
-    // actually put the vbox into the window and show everything
-    gtk_container_add(GTK_CONTAINER(window), vbox);
+    // add sidebar to main hbox
+    gtk_box_pack_start(GTK_BOX(hbox), sidebar, FALSE, FALSE, 10);
+
+    // right side content area
+    GtkWidget *contentbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+
+    // text view for showing file contents
+    fileview = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(fileview), FALSE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(fileview), FALSE);
+
+    GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL);
+    gtk_container_add(GTK_CONTAINER(scroll), fileview);
+
+    gtk_box_pack_start(GTK_BOX(contentbox), scroll, TRUE, TRUE, 5);
+
+    // combine contentbox into the main hbox
+    gtk_box_pack_start(GTK_BOX(hbox), contentbox, TRUE, TRUE, 10);
+
+    // put everything in the window
+    gtk_container_add(GTK_CONTAINER(window), hbox);
     gtk_widget_show_all(window);
 }
 
@@ -168,11 +240,11 @@ int main(int argc, char **argv)
     GtkApplication *app;  // pointer to the GTK application object
     int status;           // used to store the return code
 
-    // create a new GTK application with a simple app ID
+    // create a new GTK application with a ID
     app = gtk_application_new("com.example.gradecalc", G_APPLICATION_FLAGS_NONE);
 
     // tell GTK which function to call when the app starts/activates
-    g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
+    g_signal_connect(app, "activate", G_CALLBACK(startapp), NULL);
 
     // start the main GTK loop (this keeps the windows on the screen)
     status = g_application_run(G_APPLICATION(app), argc, argv);
