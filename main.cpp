@@ -1,12 +1,23 @@
 #include <gtk/gtk.h>
 #include <string>
 #include <fstream>
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include "authentication.h"
+#include <cstring>
+
 
 // switch between the login screen and the main app screen
 static GtkStack  *stack = NULL;
 static GtkWidget *loginpage = NULL;
 static GtkWidget *mainpage  = NULL;
+
+// for avatar stuff
+static GtkWidget *avatarframe = NULL;  // outline box
+static GtkWidget *avatarimg = NULL;    // actual image
+static GtkWidget *avatartxt = NULL;    // shows "empty" text when no avatar
+static std::string avatarpath = "";
+static const int AVATAR_BOX = 120;   // how big the avatar shows up on screen
+
 
 // for the file stuff
 static GtkWidget *fileview = NULL;    // big text box on the right
@@ -17,8 +28,24 @@ static std::string currentfile = "";
 static void setview(const std::string& text)
 {
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(fileview));
-    gtk_text_buffer_set_text(buf, text.c_str(), -1);
+
+    // gtk text buffers need valid utf-8 or it throws that critical error
+    if (g_utf8_validate(text.c_str(), text.size(), NULL))
+    {
+        gtk_text_buffer_set_text(buf, text.c_str(), -1);
+    }
+    else
+    {
+        // if the file has weird bytes, just force it into valid utf-8
+        // (this keeps the program from crashing or spamming errors)
+        char *fixed = g_strdup(text.c_str());
+        g_strcanon(fixed, (const char *)" -_.,;:!?()[]{}<>/\\|@#$%^&*+=~`\"'\n\r\t"
+                          "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", '?');
+        gtk_text_buffer_set_text(buf, fixed, -1);
+        g_free(fixed);
+    }
 }
+
 
 // just updates the little status message on the login page
 static void set_status(GtkWidget *label, const char *msg)
@@ -44,6 +71,16 @@ static void filepicked(GObject *source, GAsyncResult *res, gpointer data)
     }
 
     currentfile = path;
+        // basic check so we dont try to display random binary files
+    if (currentfile.size() < 4 || currentfile.substr(currentfile.size() - 4) != ".txt")
+    {
+        gtk_label_set_text(GTK_LABEL(filelabel), "Pick a .txt scores file");
+        setview("that file is not a .txt\n");
+        g_free(path);
+        g_object_unref(file);
+        return;
+    }
+
 
     // show the file path so its obvious what we picked
     std::string labeltxt = "Selected: " + currentfile;
@@ -77,7 +114,87 @@ static void choosefile(GtkButton *btn, gpointer data)
 
     GtkFileDialog *dialog = gtk_file_dialog_new();
     gtk_file_dialog_set_title(dialog, "Choose a scores file");
+
+    // only show text files so nobody accidentally opens an image
+    GtkFileFilter *filter = gtk_file_filter_new();
+    gtk_file_filter_add_pattern(filter, "*.txt");
+    gtk_file_filter_set_name(filter, "Text files (*.txt)");
+
+    GListStore *filters = g_list_store_new(GTK_TYPE_FILE_FILTER);
+    g_list_store_append(filters, filter);
+    gtk_file_dialog_set_filters(dialog, G_LIST_MODEL(filters));
+
+    g_object_unref(filter);
+    g_object_unref(filters);
+
     gtk_file_dialog_open(dialog, win, NULL, filepicked, NULL);
+}
+
+
+// runs after the user picks an avatar image
+static void avatarpicked(GObject *source, GAsyncResult *res, gpointer data)
+{
+    GtkFileDialog *dialog = GTK_FILE_DIALOG(source);
+    GFile *file = gtk_file_dialog_open_finish(dialog, res, NULL);
+
+    // user canceled
+    if (!file)
+        return;
+
+    char *path = g_file_get_path(file);
+    if (!path)
+    {
+        g_object_unref(file);
+        return;
+    }
+
+    avatarpath = path;
+
+    // try to load it as an image and scale it into the avatar box
+    GError *err = NULL;
+    GdkPixbuf *pix = gdk_pixbuf_new_from_file(path, &err);
+
+    if (!pix)
+    {
+        // not an image / couldnt load
+        gtk_label_set_text(GTK_LABEL(avatartxt), "could not load image");
+        if (err) g_error_free(err);
+
+        g_free(path);
+        g_object_unref(file);
+        return;
+    }
+
+    GdkPixbuf *scaled = gdk_pixbuf_scale_simple(pix, AVATAR_BOX, AVATAR_BOX, GDK_INTERP_BILINEAR);
+
+    if (scaled)
+    {
+        gtk_image_set_from_pixbuf(GTK_IMAGE(avatarimg), scaled);
+        g_object_unref(scaled);
+    }
+    else
+    {
+        // fallback just in case
+        gtk_image_set_from_file(GTK_IMAGE(avatarimg), avatarpath.c_str());
+    }
+
+    // swap the frame from the placeholder text to the actual image
+    gtk_frame_set_child(GTK_FRAME(avatarframe), avatarimg);
+
+    g_object_unref(pix);
+    g_free(path);
+    g_object_unref(file);
+}
+
+
+// runs when the user clicks "Upload Avatar"
+static void chooseavatar(GtkButton *btn, gpointer data)
+{
+    GtkWindow *win = GTK_WINDOW(data);
+
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Choose an avatar image");
+    gtk_file_dialog_open(dialog, win, NULL, avatarpicked, NULL);
 }
 
 // when the user clicks login, check the username/password
@@ -162,7 +279,6 @@ static void activate(GtkApplication *app, gpointer user_data)
 
     g_signal_connect(login_btn, "clicked", G_CALLBACK(on_login_clicked), login_widgets);
 
-    
     // main page
     mainpage = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
     gtk_widget_set_margin_top(mainpage, 20);
@@ -177,10 +293,11 @@ static void activate(GtkApplication *app, gpointer user_data)
     g_signal_connect(choosebtn, "clicked", G_CALLBACK(choosefile), window);
     gtk_box_append(GTK_BOX(sidebar), choosebtn);
 
-    // placeholders so it looks like an actual app menu
     GtkWidget *avatarbtn = gtk_button_new_with_label("Upload Avatar");
+    g_signal_connect(avatarbtn, "clicked", G_CALLBACK(chooseavatar), window);
     gtk_box_append(GTK_BOX(sidebar), avatarbtn);
 
+    // placeholders so it looks like an actual app menu
     GtkWidget *sortbtn = gtk_button_new_with_label("Sorting");
     gtk_box_append(GTK_BOX(sidebar), sortbtn);
 
@@ -199,9 +316,31 @@ static void activate(GtkApplication *app, gpointer user_data)
     // right side content
     GtkWidget *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
 
-    filelabel = gtk_label_new("Selected: (none)");
-    gtk_box_append(GTK_BOX(right), filelabel);
+    // top row: file label left, avatar right
+    GtkWidget *toprow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_box_append(GTK_BOX(right), toprow);
 
+    filelabel = gtk_label_new("Selected: (none)");
+    gtk_widget_set_hexpand(filelabel, TRUE);              // label takes the extra space
+    gtk_widget_set_halign(filelabel, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(toprow), filelabel);
+
+    // avatar box (fixed size, top-right)
+    avatarframe = gtk_frame_new(NULL);
+    gtk_widget_set_size_request(avatarframe, 120, 120);
+    gtk_widget_set_hexpand(avatarframe, FALSE);
+    gtk_widget_set_vexpand(avatarframe, FALSE);
+    gtk_widget_set_halign(avatarframe, GTK_ALIGN_END);
+    gtk_widget_set_valign(avatarframe, GTK_ALIGN_START);
+
+    avatartxt = gtk_label_new("no avatar");
+    gtk_frame_set_child(GTK_FRAME(avatarframe), avatartxt);
+
+    avatarimg = gtk_image_new();
+    gtk_widget_set_size_request(avatarimg, 120, 120);     // helps it not look tiny in a big area
+    gtk_box_append(GTK_BOX(toprow), avatarframe);
+
+    // big text box
     fileview = gtk_text_view_new();
     gtk_text_view_set_editable(GTK_TEXT_VIEW(fileview), FALSE);
     gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(fileview), FALSE);
@@ -221,6 +360,7 @@ static void activate(GtkApplication *app, gpointer user_data)
 
     gtk_widget_show(window);
 }
+
 
 int main(int argc, char **argv)
 {
