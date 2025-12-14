@@ -3,63 +3,65 @@
 #include <fstream>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include "authentication.h"
-#include <cstring>
 
 
-// switch between the login screen and the main app screen
+// pages
 static GtkStack  *stack = NULL;
 static GtkWidget *loginpage = NULL;
 static GtkWidget *mainpage  = NULL;
 
-// for avatar stuff
-static GtkWidget *avatarframe = NULL;  // outline box
-static GtkWidget *avatarimg = NULL;    // actual image
-static GtkWidget *avatartxt = NULL;    // shows "empty" text when no avatar
+// avatar
+static GtkWidget *avatarframe = NULL;
+static GtkWidget *avatarimg   = NULL;
+static GtkWidget *avatartxt   = NULL;
 static std::string avatarpath = "";
-static const int AVATAR_BOX = 120;   // how big the avatar shows up on screen
+static const int AVATAR_BOX = 120;
 
-
-// for the file stuff
-static GtkWidget *fileview = NULL;    // big text box on the right
-static GtkWidget *filelabel = NULL;   // shows what file we selected
+// file display
+static GtkWidget *fileview  = NULL;
+static GtkWidget *filelabel = NULL;
 static std::string currentfile = "";
 
-// quick helper so i dont repeat this everywhere
+
+// updates the main text display
 static void setview(const std::string& text)
 {
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(fileview));
 
-    // gtk text buffers need valid utf-8 or it throws that critical error
     if (g_utf8_validate(text.c_str(), text.size(), NULL))
     {
         gtk_text_buffer_set_text(buf, text.c_str(), -1);
     }
     else
     {
-        // if the file has weird bytes, just force it into valid utf-8
-        // (this keeps the program from crashing or spamming errors)
         char *fixed = g_strdup(text.c_str());
-        g_strcanon(fixed, (const char *)" -_.,;:!?()[]{}<>/\\|@#$%^&*+=~`\"'\n\r\t"
-                          "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789", '?');
+
+        g_strcanon(
+            fixed,
+            (const char *)" -_.,;:!?()[]{}<>/\\|@#$%^&*+=~`\"'\n\r\t"
+                         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789",
+            '?'
+        );
+
         gtk_text_buffer_set_text(buf, fixed, -1);
         g_free(fixed);
     }
 }
 
 
-// just updates the little status message on the login page
+// updates login status label
 static void set_status(GtkWidget *label, const char *msg)
 {
     gtk_label_set_text(GTK_LABEL(label), msg);
 }
 
-// this runs after the file picker closes (only when a file was actually picked)
+
+// file picker callback
 static void filepicked(GObject *source, GAsyncResult *res, gpointer data)
 {
     GtkFileDialog *dialog = GTK_FILE_DIALOG(source);
     GFile *file = gtk_file_dialog_open_finish(dialog, res, NULL);
 
-    // user canceled out of the file chooser
     if (!file)
         return;
 
@@ -71,7 +73,8 @@ static void filepicked(GObject *source, GAsyncResult *res, gpointer data)
     }
 
     currentfile = path;
-        // basic check so we dont try to display random binary files
+
+    // only allow .txt
     if (currentfile.size() < 4 || currentfile.substr(currentfile.size() - 4) != ".txt")
     {
         gtk_label_set_text(GTK_LABEL(filelabel), "Pick a .txt scores file");
@@ -81,12 +84,11 @@ static void filepicked(GObject *source, GAsyncResult *res, gpointer data)
         return;
     }
 
-
-    // show the file path so its obvious what we picked
+    // show selected file
     std::string labeltxt = "Selected: " + currentfile;
     gtk_label_set_text(GTK_LABEL(filelabel), labeltxt.c_str());
 
-    // open the file and dump it into the text box
+    // dump file into view
     std::ifstream in(currentfile.c_str());
     std::string line;
     std::string contents;
@@ -107,7 +109,8 @@ static void filepicked(GObject *source, GAsyncResult *res, gpointer data)
     g_object_unref(file);
 }
 
-// runs when the user clicks "Choose File"
+
+// open file dialog
 static void choosefile(GtkButton *btn, gpointer data)
 {
     GtkWindow *win = GTK_WINDOW(data);
@@ -115,7 +118,7 @@ static void choosefile(GtkButton *btn, gpointer data)
     GtkFileDialog *dialog = gtk_file_dialog_new();
     gtk_file_dialog_set_title(dialog, "Choose a scores file");
 
-    // only show text files so nobody accidentally opens an image
+    // filter for text files
     GtkFileFilter *filter = gtk_file_filter_new();
     gtk_file_filter_add_pattern(filter, "*.txt");
     gtk_file_filter_set_name(filter, "Text files (*.txt)");
@@ -131,13 +134,12 @@ static void choosefile(GtkButton *btn, gpointer data)
 }
 
 
-// runs after the user picks an avatar image
+// avatar picker callback
 static void avatarpicked(GObject *source, GAsyncResult *res, gpointer data)
 {
     GtkFileDialog *dialog = GTK_FILE_DIALOG(source);
     GFile *file = gtk_file_dialog_open_finish(dialog, res, NULL);
 
-    // user canceled
     if (!file)
         return;
 
@@ -150,13 +152,12 @@ static void avatarpicked(GObject *source, GAsyncResult *res, gpointer data)
 
     avatarpath = path;
 
-    // try to load it as an image and scale it into the avatar box
+    // load and scale avatar
     GError *err = NULL;
     GdkPixbuf *pix = gdk_pixbuf_new_from_file(path, &err);
 
     if (!pix)
     {
-        // not an image / couldnt load
         gtk_label_set_text(GTK_LABEL(avatartxt), "could not load image");
         if (err) g_error_free(err);
 
@@ -174,11 +175,11 @@ static void avatarpicked(GObject *source, GAsyncResult *res, gpointer data)
     }
     else
     {
-        // fallback just in case
         gtk_image_set_from_file(GTK_IMAGE(avatarimg), avatarpath.c_str());
     }
 
-    // swap the frame from the placeholder text to the actual image
+    // replace placeholder with image
+    gtk_widget_remove_css_class(avatartxt, "avatar-empty");
     gtk_frame_set_child(GTK_FRAME(avatarframe), avatarimg);
 
     g_object_unref(pix);
@@ -187,7 +188,7 @@ static void avatarpicked(GObject *source, GAsyncResult *res, gpointer data)
 }
 
 
-// runs when the user clicks "Upload Avatar"
+// open avatar dialog
 static void chooseavatar(GtkButton *btn, gpointer data)
 {
     GtkWindow *win = GTK_WINDOW(data);
@@ -197,7 +198,8 @@ static void chooseavatar(GtkButton *btn, gpointer data)
     gtk_file_dialog_open(dialog, win, NULL, avatarpicked, NULL);
 }
 
-// when the user clicks login, check the username/password
+
+// login button callback
 static void on_login_clicked(GtkButton *button, gpointer user_data)
 {
     GtkWidget **widgets = (GtkWidget **)user_data;
@@ -223,11 +225,13 @@ static void on_login_clicked(GtkButton *button, gpointer user_data)
     }
 }
 
-// just a placeholder button so you know clicks work
+
+// test button callback
 static void on_button_clicked(GtkButton *button, gpointer user_data)
 {
     g_print("Button was clicked!\n");
 }
+
 
 // startup function for the GTK app
 static void activate(GtkApplication *app, gpointer user_data)
@@ -235,25 +239,34 @@ static void activate(GtkApplication *app, gpointer user_data)
     // main window
     GtkWidget *window = gtk_application_window_new(app);
     gtk_window_set_title(GTK_WINDOW(window), "Grade Calculator Practice");
-gtk_window_set_default_size(GTK_WINDOW(window), 800, 500);
-gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
+    gtk_window_set_default_size(GTK_WINDOW(window), 800, 500);
+    gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
 
-
-    // basic styling (kept simple on purpose)
+    // css theme
     GtkCssProvider *provider = gtk_css_provider_new();
     gtk_css_provider_load_from_data(
         provider,
-        "window { background: #f2f2f2; }"
+        "window { background: #8aa9ff; }"
 
-        /* login page split */
+        ".sidebar { background: #8aa9ff; padding: 12px; }"
+        ".sidebar label { color: #ffffff; }"
+        ".sidebar button { background: transparent; color: #ffffff; border: 3px solid #cfcfcf; border-radius: 6px; padding: 8px; }"
+
+        ".content { background: #8aa9ff; padding: 10px; }"
+        ".content label { color: #ffffff; }"
+
+        ".display-area { background: #ffffff; }"
+        ".display-area textview { background: #ffffff; color: #000000; }"
+
+        ".avatar-frame { border: 3px solid #cfcfcf; border-radius: 6px; }"
+        ".avatar-empty { background: #8aa9ff; color: #ffffff; padding: 10px; border-radius: 6px; }"
+
         ".login-left { background: #8aa9ff; padding: 30px; }"
         ".login-right { background: #ffffff; padding: 30px; }"
 
-        /* left text */
         ".app-title { color: #ffffff; font-size: 28px; font-weight: 700; }"
         ".app-subtitle { color: #ffffff; font-size: 14px; }"
 
-        /* right text */
         ".login-title { font-size: 20px; font-weight: 700; }"
         ".login-btn { background: #4a6cf7; color: #ffffff; border-radius: 6px; padding: 8px; }",
         -1
@@ -265,16 +278,16 @@ gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
     );
 
-    // stack holds login page + main page
+    // stack
     stack = GTK_STACK(gtk_stack_new());
     gtk_window_set_child(GTK_WINDOW(window), GTK_WIDGET(stack));
 
-    // login page (split: left info panel + right login form)
+    // login page
     loginpage = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
     gtk_widget_set_hexpand(loginpage, TRUE);
     gtk_widget_set_vexpand(loginpage, TRUE);
 
-    // LEFT panel
+    // left panel
     GtkWidget *left = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_set_hexpand(left, TRUE);
     gtk_widget_set_vexpand(left, TRUE);
@@ -290,12 +303,11 @@ gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
     gtk_widget_add_css_class(app_sub, "app-subtitle");
     gtk_box_append(GTK_BOX(left), app_sub);
 
-    // spacer so text sits nicely near the top
     GtkWidget *left_spacer = gtk_label_new("");
     gtk_widget_set_vexpand(left_spacer, TRUE);
     gtk_box_append(GTK_BOX(left), left_spacer);
 
-    // RIGHT panel (login form)
+    // right panel
     GtkWidget *right_login = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
     gtk_widget_set_hexpand(right_login, TRUE);
     gtk_widget_set_vexpand(right_login, TRUE);
@@ -332,11 +344,10 @@ gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
     gtk_widget_add_css_class(login_btn, "login-btn");
     gtk_box_append(GTK_BOX(right_login), login_btn);
 
-    // put panels into loginpage
     gtk_box_append(GTK_BOX(loginpage), left);
     gtk_box_append(GTK_BOX(loginpage), right_login);
 
-    // pass widgets into the login callback (UNCHANGED)
+    // login widget list
     static GtkWidget *login_widgets[3];
     login_widgets[0] = user_entry;
     login_widgets[1] = pass_entry;
@@ -351,9 +362,25 @@ gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
     gtk_widget_set_margin_start(mainpage, 20);
     gtk_widget_set_margin_end(mainpage, 20);
 
-    // left side buttons
+    // sidebar wrapper
+    GtkWidget *sidebar_wrap = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_widget_set_vexpand(sidebar_wrap, TRUE);
+    gtk_widget_set_hexpand(sidebar_wrap, FALSE);
+    gtk_widget_add_css_class(sidebar_wrap, "sidebar");
+
+    GtkWidget *top_spacer = gtk_label_new("");
+    gtk_widget_set_vexpand(top_spacer, TRUE);
+
     GtkWidget *sidebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
 
+    GtkWidget *bot_spacer = gtk_label_new("");
+    gtk_widget_set_vexpand(bot_spacer, TRUE);
+
+    gtk_box_append(GTK_BOX(sidebar_wrap), top_spacer);
+    gtk_box_append(GTK_BOX(sidebar_wrap), sidebar);
+    gtk_box_append(GTK_BOX(sidebar_wrap), bot_spacer);
+
+    // sidebar buttons
     GtkWidget *choosebtn = gtk_button_new_with_label("Choose File");
     g_signal_connect(choosebtn, "clicked", G_CALLBACK(choosefile), window);
     gtk_box_append(GTK_BOX(sidebar), choosebtn);
@@ -362,7 +389,6 @@ gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
     g_signal_connect(avatarbtn, "clicked", G_CALLBACK(chooseavatar), window);
     gtk_box_append(GTK_BOX(sidebar), avatarbtn);
 
-    // placeholders so it looks like an actual app menu
     GtkWidget *sortbtn = gtk_button_new_with_label("Sorting");
     gtk_box_append(GTK_BOX(sidebar), sortbtn);
 
@@ -376,36 +402,40 @@ gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
     g_signal_connect(testbtn, "clicked", G_CALLBACK(on_button_clicked), NULL);
     gtk_box_append(GTK_BOX(sidebar), testbtn);
 
-    gtk_box_append(GTK_BOX(mainpage), sidebar);
+    gtk_box_append(GTK_BOX(mainpage), sidebar_wrap);
 
-    // right side content
+    // right side
     GtkWidget *rightbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_add_css_class(rightbox, "content");
 
-    // top row: file label left, avatar right
+    // top row
     GtkWidget *toprow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
     gtk_box_append(GTK_BOX(rightbox), toprow);
 
     filelabel = gtk_label_new("Selected: (none)");
-    gtk_widget_set_hexpand(filelabel, TRUE);              // label takes the extra space
+    gtk_widget_set_hexpand(filelabel, TRUE);
     gtk_widget_set_halign(filelabel, GTK_ALIGN_START);
     gtk_box_append(GTK_BOX(toprow), filelabel);
 
-    // avatar box (fixed size, top-right)
+    // avatar box
     avatarframe = gtk_frame_new(NULL);
-    gtk_widget_set_size_request(avatarframe, 120, 120);
+    gtk_widget_add_css_class(avatarframe, "avatar-frame");
+    gtk_widget_set_size_request(avatarframe, AVATAR_BOX, AVATAR_BOX);
     gtk_widget_set_hexpand(avatarframe, FALSE);
     gtk_widget_set_vexpand(avatarframe, FALSE);
     gtk_widget_set_halign(avatarframe, GTK_ALIGN_END);
     gtk_widget_set_valign(avatarframe, GTK_ALIGN_START);
 
     avatartxt = gtk_label_new("no avatar");
+    gtk_widget_add_css_class(avatartxt, "avatar-empty");
     gtk_frame_set_child(GTK_FRAME(avatarframe), avatartxt);
 
     avatarimg = gtk_image_new();
-    gtk_widget_set_size_request(avatarimg, 120, 120);     // helps it not look tiny in a big area
+    gtk_widget_set_size_request(avatarimg, AVATAR_BOX, AVATAR_BOX);
+
     gtk_box_append(GTK_BOX(toprow), avatarframe);
 
-    // big text box
+    // file view
     fileview = gtk_text_view_new();
     gtk_text_view_set_editable(GTK_TEXT_VIEW(fileview), FALSE);
     gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(fileview), FALSE);
@@ -413,12 +443,13 @@ gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
     GtkWidget *scroll = gtk_scrolled_window_new();
     gtk_widget_set_vexpand(scroll, TRUE);
     gtk_widget_set_hexpand(scroll, TRUE);
+    gtk_widget_add_css_class(scroll, "display-area");
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), fileview);
 
     gtk_box_append(GTK_BOX(rightbox), scroll);
     gtk_box_append(GTK_BOX(mainpage), rightbox);
 
-    // add both pages to the stack and show login first
+    // stack pages
     gtk_stack_add_named(GTK_STACK(stack), loginpage, "login");
     gtk_stack_add_named(GTK_STACK(stack), mainpage, "main");
     gtk_stack_set_visible_child(GTK_STACK(stack), loginpage);
