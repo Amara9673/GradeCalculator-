@@ -1,184 +1,237 @@
 #include <gtk/gtk.h>
 #include <string>
+#include <fstream>
 #include "authentication.h"
 
-// This function pops up a login window.
-// It keeps asking for a username and password until:
-//   1) the user enters valid info  -> returns true
-//   2) the user hits Cancel / closes the dialog -> returns false
-bool show_login_dialog(GtkWindow *parent)
+// switch between the login screen and the main app screen
+static GtkStack  *stack = NULL;
+static GtkWidget *loginpage = NULL;
+static GtkWidget *mainpage  = NULL;
+
+// for the file stuff
+static GtkWidget *fileview = NULL;    // big text box on the right
+static GtkWidget *filelabel = NULL;   // shows what file we selected
+static std::string currentfile = "";
+
+// quick helper so i dont repeat this everywhere
+static void setview(const std::string& text)
 {
-    bool loggedIn = false;   // will become true only if loginCheck passes
-    bool done     = false;   // controls the while loop
-
-    while (!done)
-    {
-        // create the login dialog window with two buttons: Cancel and Login
-        GtkWidget *dialog = gtk_dialog_new_with_buttons(
-            "Login",                 // title of the window
-            parent,                  // parent window (can be main window)
-            GTK_DIALOG_MODAL,        // makes the dialog block input to other windows
-            "_Cancel",               // text for the Cancel button
-            GTK_RESPONSE_CANCEL,     // value returned when Cancel is clicked
-            "_Login",                // text for the Login button
-            GTK_RESPONSE_OK,         // value returned when Login is clicked
-            NULL                     // end of the button list
-        );
-
-        // get the area inside the dialog where we can pack widgets
-        GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
-
-        // create a vertical box to stack the labels and text entries
-        GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-        gtk_container_set_border_width(GTK_CONTAINER(vbox), 10);
-        gtk_box_pack_start(GTK_BOX(content), vbox, TRUE, TRUE, 0);
-
-        //  username label + text box 
-        GtkWidget *user_label = gtk_label_new("Username:");
-        gtk_box_pack_start(GTK_BOX(vbox), user_label, FALSE, FALSE, 0);
-
-        GtkWidget *user_entry = gtk_entry_new();
-        gtk_box_pack_start(GTK_BOX(vbox), user_entry, FALSE, FALSE, 0);
-
-        //  password label + text box 
-        GtkWidget *pass_label = gtk_label_new("Password:");
-        gtk_box_pack_start(GTK_BOX(vbox), pass_label, FALSE, FALSE, 0);
-
-        GtkWidget *pass_entry = gtk_entry_new();
-        // hide the actual characters so it looks like a real password field
-        gtk_entry_set_visibility(GTK_ENTRY(pass_entry), FALSE);
-        gtk_entry_set_invisible_char(GTK_ENTRY(pass_entry), '*');
-        gtk_box_pack_start(GTK_BOX(vbox), pass_entry, FALSE, FALSE, 0);
-
-        // make all the widgets in the dialog visible
-        gtk_widget_show_all(dialog);
-
-        // run the dialog and wait until the user presses a button
-        gint response = gtk_dialog_run(GTK_DIALOG(dialog));
-
-        // if the user hit cancel/closed the window then it will stop asking to log in
-        if (response == GTK_RESPONSE_CANCEL || response == GTK_RESPONSE_DELETE_EVENT)
-        {
-            gtk_widget_destroy(dialog);
-            loggedIn = false;
-            done = true;       // leave the while loop
-        }
-        else if (response == GTK_RESPONSE_OK)
-        {
-            // grab whatever the user typed into the two text boxes
-            const char *u = gtk_entry_get_text(GTK_ENTRY(user_entry));
-            const char *p = gtk_entry_get_text(GTK_ENTRY(pass_entry));
-
-            std::string username = u;
-            std::string password = p;
-
-            gtk_widget_destroy(dialog);
-
-            // use our authentication function to check the login info
-            if (loginCheck(username, password))
-            {
-                // show a login successful message
-                GtkWidget *msg = gtk_message_dialog_new(
-                    parent,
-                    GTK_DIALOG_MODAL,
-                    GTK_MESSAGE_INFO,
-                    GTK_BUTTONS_OK,
-                    "Login successful. Welcome back, %s!",
-                    username.c_str()
-                );
-                gtk_dialog_run(GTK_DIALOG(msg));
-                gtk_widget_destroy(msg);
-
-                loggedIn = true;   // mark that the user is now logged in
-                done = true;       // leave the while loop
-            }
-            else
-            {
-                // if the username/password combo was not found in the file tell the user and then the while loop will repeat
-                GtkWidget *msg = gtk_message_dialog_new(
-                    parent,
-                    GTK_DIALOG_MODAL,
-                    GTK_MESSAGE_ERROR,
-                    GTK_BUTTONS_OK,
-                    "Invalid username or password."
-                );
-                gtk_dialog_run(GTK_DIALOG(msg));
-                gtk_widget_destroy(msg);
-
-                // loggedIn stays false, done stays false & we loop again
-            }
-        }
-        else
-        {
-            // any other response 
-            gtk_widget_destroy(dialog);
-            loggedIn = false;
-            done = true;
-        }
-    }
-
-    return loggedIn;
+    GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(fileview));
+    gtk_text_buffer_set_text(buf, text.c_str(), -1);
 }
 
-// This function runs when the button in the main window gets clicked.
-// Right now it just prints a message to the terminal.
+// just updates the little status message on the login page
+static void set_status(GtkWidget *label, const char *msg)
+{
+    gtk_label_set_text(GTK_LABEL(label), msg);
+}
+
+// this runs after the file picker closes (only when a file was actually picked)
+static void filepicked(GObject *source, GAsyncResult *res, gpointer data)
+{
+    GtkFileDialog *dialog = GTK_FILE_DIALOG(source);
+    GFile *file = gtk_file_dialog_open_finish(dialog, res, NULL);
+
+    // user canceled out of the file chooser
+    if (!file)
+        return;
+
+    char *path = g_file_get_path(file);
+    if (!path)
+    {
+        g_object_unref(file);
+        return;
+    }
+
+    currentfile = path;
+
+    // show the file path so its obvious what we picked
+    std::string labeltxt = "Selected: " + currentfile;
+    gtk_label_set_text(GTK_LABEL(filelabel), labeltxt.c_str());
+
+    // open the file and dump it into the text box
+    std::ifstream in(currentfile.c_str());
+    std::string line;
+    std::string contents;
+
+    if (in)
+    {
+        while (std::getline(in, line))
+            contents += line + "\n";
+    }
+    else
+    {
+        contents = "could not open that file\n";
+    }
+
+    setview(contents);
+
+    g_free(path);
+    g_object_unref(file);
+}
+
+// runs when the user clicks "Choose File"
+static void choosefile(GtkButton *btn, gpointer data)
+{
+    GtkWindow *win = GTK_WINDOW(data);
+
+    GtkFileDialog *dialog = gtk_file_dialog_new();
+    gtk_file_dialog_set_title(dialog, "Choose a scores file");
+    gtk_file_dialog_open(dialog, win, NULL, filepicked, NULL);
+}
+
+// when the user clicks login, check the username/password
+static void on_login_clicked(GtkButton *button, gpointer user_data)
+{
+    GtkWidget **widgets = (GtkWidget **)user_data;
+
+    GtkWidget *user_entry = widgets[0];
+    GtkWidget *pass_entry = widgets[1];
+    GtkWidget *status_lbl = widgets[2];
+
+    const char *u = gtk_editable_get_text(GTK_EDITABLE(user_entry));
+    const char *p = gtk_editable_get_text(GTK_EDITABLE(pass_entry));
+
+    std::string username = u ? u : "";
+    std::string password = p ? p : "";
+
+    if (loginCheck(username, password))
+    {
+        set_status(status_lbl, "Login successful.");
+        gtk_stack_set_visible_child(GTK_STACK(stack), mainpage);
+    }
+    else
+    {
+        set_status(status_lbl, "Invalid username or password.");
+    }
+}
+
+// just a placeholder button so you know clicks work
 static void on_button_clicked(GtkButton *button, gpointer user_data)
 {
     g_print("Button was clicked!\n");
 }
 
-// This is the startup function for the GTK app.
-// It creates the main window and sets up the widgets inside it.
+// startup function for the GTK app
 static void activate(GtkApplication *app, gpointer user_data)
 {
-    // create the main window
+    // main window
     GtkWidget *window = gtk_application_window_new(app);
     gtk_window_set_title(GTK_WINDOW(window), "Grade Calculator Practice");
-    gtk_window_set_default_size(GTK_WINDOW(window), 400, 200);
+    gtk_window_set_default_size(GTK_WINDOW(window), 800, 500);
 
-    // before showing the main window, force the user to log in
-    if (!show_login_dialog(GTK_WINDOW(window)))
-    {
-        // if show_login_dialog returned false, user failed/exited so we just quit the program
-        // i think we could put something funny here. like an image or smthn when they get the login wrong
-        g_application_quit(G_APPLICATION(app));
-        return;
-    }
+    // stack holds login page + main page
+    stack = GTK_STACK(gtk_stack_new());
+    gtk_window_set_child(GTK_WINDOW(window), GTK_WIDGET(stack));
 
-    // main vertical box to organize everything inside the window
-    GtkWidget *vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    gtk_container_set_border_width(GTK_CONTAINER(vbox), 20);
+    // login page
+    loginpage = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
+    gtk_widget_set_margin_top(loginpage, 20);
+    gtk_widget_set_margin_bottom(loginpage, 20);
+    gtk_widget_set_margin_start(loginpage, 20);
+    gtk_widget_set_margin_end(loginpage, 20);
 
-    // simple label at the top of the window
-    GtkWidget *label = gtk_label_new("Welcome to Grade Calculator");
-    gtk_box_pack_start(GTK_BOX(vbox), label, FALSE, FALSE, 5);
+    GtkWidget *title = gtk_label_new("Please login:");
+    gtk_box_append(GTK_BOX(loginpage), title);
 
-    // button the user can click (for now it just prints to the terminal)
-    GtkWidget *button = gtk_button_new_with_label("Click Me");
-    g_signal_connect(button, "clicked", G_CALLBACK(on_button_clicked), NULL);
-    gtk_box_pack_start(GTK_BOX(vbox), button, FALSE, FALSE, 5);
+    GtkWidget *user_label = gtk_label_new("Username:");
+    gtk_box_append(GTK_BOX(loginpage), user_label);
 
-    // actually put the vbox into the window and show everything
-    gtk_container_add(GTK_CONTAINER(window), vbox);
-    gtk_widget_show_all(window);
+    GtkWidget *user_entry = gtk_entry_new();
+    gtk_box_append(GTK_BOX(loginpage), user_entry);
+
+    GtkWidget *pass_label = gtk_label_new("Password:");
+    gtk_box_append(GTK_BOX(loginpage), pass_label);
+
+    GtkWidget *pass_entry = gtk_entry_new();
+    gtk_entry_set_visibility(GTK_ENTRY(pass_entry), FALSE);
+    gtk_entry_set_invisible_char(GTK_ENTRY(pass_entry), '*');
+    gtk_box_append(GTK_BOX(loginpage), pass_entry);
+
+    GtkWidget *status_lbl = gtk_label_new("");
+    gtk_box_append(GTK_BOX(loginpage), status_lbl);
+
+    GtkWidget *login_btn = gtk_button_new_with_label("Login");
+    gtk_box_append(GTK_BOX(loginpage), login_btn);
+
+    // pass widgets into the login callback
+    static GtkWidget *login_widgets[3];
+    login_widgets[0] = user_entry;
+    login_widgets[1] = pass_entry;
+    login_widgets[2] = status_lbl;
+
+    g_signal_connect(login_btn, "clicked", G_CALLBACK(on_login_clicked), login_widgets);
+
+    
+    // main page
+    mainpage = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
+    gtk_widget_set_margin_top(mainpage, 20);
+    gtk_widget_set_margin_bottom(mainpage, 20);
+    gtk_widget_set_margin_start(mainpage, 20);
+    gtk_widget_set_margin_end(mainpage, 20);
+
+    // left side buttons
+    GtkWidget *sidebar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+
+    GtkWidget *choosebtn = gtk_button_new_with_label("Choose File");
+    g_signal_connect(choosebtn, "clicked", G_CALLBACK(choosefile), window);
+    gtk_box_append(GTK_BOX(sidebar), choosebtn);
+
+    // placeholders so it looks like an actual app menu
+    GtkWidget *avatarbtn = gtk_button_new_with_label("Upload Avatar");
+    gtk_box_append(GTK_BOX(sidebar), avatarbtn);
+
+    GtkWidget *sortbtn = gtk_button_new_with_label("Sorting");
+    gtk_box_append(GTK_BOX(sidebar), sortbtn);
+
+    GtkWidget *barchartbtn = gtk_button_new_with_label("Bar Chart");
+    gtk_box_append(GTK_BOX(sidebar), barchartbtn);
+
+    GtkWidget *piebtn = gtk_button_new_with_label("Pie Chart");
+    gtk_box_append(GTK_BOX(sidebar), piebtn);
+
+    GtkWidget *testbtn = gtk_button_new_with_label("Click Me");
+    g_signal_connect(testbtn, "clicked", G_CALLBACK(on_button_clicked), NULL);
+    gtk_box_append(GTK_BOX(sidebar), testbtn);
+
+    gtk_box_append(GTK_BOX(mainpage), sidebar);
+
+    // right side content
+    GtkWidget *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+
+    filelabel = gtk_label_new("Selected: (none)");
+    gtk_box_append(GTK_BOX(right), filelabel);
+
+    fileview = gtk_text_view_new();
+    gtk_text_view_set_editable(GTK_TEXT_VIEW(fileview), FALSE);
+    gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(fileview), FALSE);
+
+    GtkWidget *scroll = gtk_scrolled_window_new();
+    gtk_widget_set_vexpand(scroll, TRUE);
+    gtk_widget_set_hexpand(scroll, TRUE);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), fileview);
+
+    gtk_box_append(GTK_BOX(right), scroll);
+    gtk_box_append(GTK_BOX(mainpage), right);
+
+    // add both pages to the stack and show login first
+    gtk_stack_add_named(GTK_STACK(stack), loginpage, "login");
+    gtk_stack_add_named(GTK_STACK(stack), mainpage, "main");
+    gtk_stack_set_visible_child(GTK_STACK(stack), loginpage);
+
+    gtk_widget_show(window);
 }
 
 int main(int argc, char **argv)
 {
-    GtkApplication *app;  // pointer to the GTK application object
-    int status;           // used to store the return code
+    GtkApplication *app;
+    int status;
 
-    // create a new GTK application with a simple app ID
-    app = gtk_application_new("com.example.gradecalc", G_APPLICATION_FLAGS_NONE);
-
-    // tell GTK which function to call when the app starts/activates
+    app = gtk_application_new("com.example.gradecalc", G_APPLICATION_DEFAULT_FLAGS);
     g_signal_connect(app, "activate", G_CALLBACK(activate), NULL);
 
-    // start the main GTK loop (this keeps the windows on the screen)
     status = g_application_run(G_APPLICATION(app), argc, argv);
 
-    // clean up after the app closes
     g_object_unref(app);
-
-    return status;        // return the apps status code to the OS
+    return status;
 }
