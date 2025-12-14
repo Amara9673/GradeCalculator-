@@ -237,41 +237,104 @@ static void activate(GtkApplication *app, gpointer user_data)
     gtk_window_set_title(GTK_WINDOW(window), "Grade Calculator Practice");
     gtk_window_set_default_size(GTK_WINDOW(window), 800, 500);
 
+    // basic styling (kept simple on purpose)
+    GtkCssProvider *provider = gtk_css_provider_new();
+    gtk_css_provider_load_from_data(
+        provider,
+        "window { background: #f2f2f2; }"
+
+        /* login page split */
+        ".login-left { background: #8aa9ff; padding: 30px; }"
+        ".login-right { background: #ffffff; padding: 30px; }"
+
+        /* left text */
+        ".app-title { color: #ffffff; font-size: 28px; font-weight: 700; }"
+        ".app-subtitle { color: #ffffff; font-size: 14px; }"
+
+        /* right text */
+        ".login-title { font-size: 20px; font-weight: 700; }"
+        ".login-btn { background: #4a6cf7; color: #ffffff; border-radius: 6px; padding: 8px; }",
+        -1
+    );
+
+    gtk_style_context_add_provider_for_display(
+        gdk_display_get_default(),
+        GTK_STYLE_PROVIDER(provider),
+        GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
+    );
+
     // stack holds login page + main page
     stack = GTK_STACK(gtk_stack_new());
     gtk_window_set_child(GTK_WINDOW(window), GTK_WIDGET(stack));
 
-    // login page
-    loginpage = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-    gtk_widget_set_margin_top(loginpage, 20);
-    gtk_widget_set_margin_bottom(loginpage, 20);
-    gtk_widget_set_margin_start(loginpage, 20);
-    gtk_widget_set_margin_end(loginpage, 20);
+    // login page (split: left info panel + right login form)
+    loginpage = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    gtk_widget_set_hexpand(loginpage, TRUE);
+    gtk_widget_set_vexpand(loginpage, TRUE);
 
-    GtkWidget *title = gtk_label_new("Please login:");
-    gtk_box_append(GTK_BOX(loginpage), title);
+    // LEFT panel
+    GtkWidget *left = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_hexpand(left, TRUE);
+    gtk_widget_set_vexpand(left, TRUE);
+    gtk_widget_add_css_class(left, "login-left");
+
+    GtkWidget *app_title = gtk_label_new("Grade Calculator");
+    gtk_widget_set_halign(app_title, GTK_ALIGN_START);
+    gtk_widget_add_css_class(app_title, "app-title");
+    gtk_box_append(GTK_BOX(left), app_title);
+
+    GtkWidget *app_sub = gtk_label_new("Created by: Amara Whitson and Ben Yodena");
+    gtk_widget_set_halign(app_sub, GTK_ALIGN_START);
+    gtk_widget_add_css_class(app_sub, "app-subtitle");
+    gtk_box_append(GTK_BOX(left), app_sub);
+
+    // spacer so text sits nicely near the top
+    GtkWidget *left_spacer = gtk_label_new("");
+    gtk_widget_set_vexpand(left_spacer, TRUE);
+    gtk_box_append(GTK_BOX(left), left_spacer);
+
+    // RIGHT panel (login form)
+    GtkWidget *right_login = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_set_hexpand(right_login, TRUE);
+    gtk_widget_set_vexpand(right_login, TRUE);
+    gtk_widget_add_css_class(right_login, "login-right");
+
+    GtkWidget *title = gtk_label_new("Welcome Back!");
+    gtk_widget_set_halign(title, GTK_ALIGN_START);
+    gtk_widget_add_css_class(title, "login-title");
+    gtk_box_append(GTK_BOX(right_login), title);
 
     GtkWidget *user_label = gtk_label_new("Username:");
-    gtk_box_append(GTK_BOX(loginpage), user_label);
+    gtk_widget_set_halign(user_label, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(right_login), user_label);
 
     GtkWidget *user_entry = gtk_entry_new();
-    gtk_box_append(GTK_BOX(loginpage), user_entry);
+    gtk_entry_set_placeholder_text(GTK_ENTRY(user_entry), "Enter username");
+    gtk_box_append(GTK_BOX(right_login), user_entry);
 
     GtkWidget *pass_label = gtk_label_new("Password:");
-    gtk_box_append(GTK_BOX(loginpage), pass_label);
+    gtk_widget_set_halign(pass_label, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(right_login), pass_label);
 
     GtkWidget *pass_entry = gtk_entry_new();
+    gtk_entry_set_placeholder_text(GTK_ENTRY(pass_entry), "Enter password");
     gtk_entry_set_visibility(GTK_ENTRY(pass_entry), FALSE);
     gtk_entry_set_invisible_char(GTK_ENTRY(pass_entry), '*');
-    gtk_box_append(GTK_BOX(loginpage), pass_entry);
+    gtk_box_append(GTK_BOX(right_login), pass_entry);
 
     GtkWidget *status_lbl = gtk_label_new("");
-    gtk_box_append(GTK_BOX(loginpage), status_lbl);
+    gtk_widget_set_halign(status_lbl, GTK_ALIGN_START);
+    gtk_box_append(GTK_BOX(right_login), status_lbl);
 
     GtkWidget *login_btn = gtk_button_new_with_label("Login");
-    gtk_box_append(GTK_BOX(loginpage), login_btn);
+    gtk_widget_add_css_class(login_btn, "login-btn");
+    gtk_box_append(GTK_BOX(right_login), login_btn);
 
-    // pass widgets into the login callback
+    // put panels into loginpage
+    gtk_box_append(GTK_BOX(loginpage), left);
+    gtk_box_append(GTK_BOX(loginpage), right_login);
+
+    // pass widgets into the login callback (UNCHANGED)
     static GtkWidget *login_widgets[3];
     login_widgets[0] = user_entry;
     login_widgets[1] = pass_entry;
@@ -314,11 +377,11 @@ static void activate(GtkApplication *app, gpointer user_data)
     gtk_box_append(GTK_BOX(mainpage), sidebar);
 
     // right side content
-    GtkWidget *right = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    GtkWidget *rightbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
 
     // top row: file label left, avatar right
     GtkWidget *toprow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-    gtk_box_append(GTK_BOX(right), toprow);
+    gtk_box_append(GTK_BOX(rightbox), toprow);
 
     filelabel = gtk_label_new("Selected: (none)");
     gtk_widget_set_hexpand(filelabel, TRUE);              // label takes the extra space
@@ -350,8 +413,8 @@ static void activate(GtkApplication *app, gpointer user_data)
     gtk_widget_set_hexpand(scroll, TRUE);
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), fileview);
 
-    gtk_box_append(GTK_BOX(right), scroll);
-    gtk_box_append(GTK_BOX(mainpage), right);
+    gtk_box_append(GTK_BOX(rightbox), scroll);
+    gtk_box_append(GTK_BOX(mainpage), rightbox);
 
     // add both pages to the stack and show login first
     gtk_stack_add_named(GTK_STACK(stack), loginpage, "login");
