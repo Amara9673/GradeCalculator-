@@ -3,6 +3,8 @@
 
 #include <gtk/gtk.h>
 #include <string>
+#include "myClass.h"
+
 
 class AppUI {
 public:
@@ -12,6 +14,9 @@ public:
     void run(GtkApplication *app);
 
 private:
+    myClass cls;
+    bool hasClass;
+
     // screens
     GtkStack  *stack;
     GtkWidget *loginBox;

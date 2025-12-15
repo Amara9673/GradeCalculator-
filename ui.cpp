@@ -1,14 +1,19 @@
 #include "ui.h"
+#include "load.h"
+
 
 #include <fstream>
 #include <sstream>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 #include "authentication.h"
 #include "theme.h"
+#include <iostream>
 
 
 AppUI::AppUI()
 {
+    hasClass = false;
+
     //starting values
     window   = NULL;
     stack    = NULL;
@@ -130,6 +135,24 @@ void AppUI::pickedFile(GObject *source, GAsyncResult *res, gpointer data)
     }
 
     ui->setText(contents);
+        // load class data
+    myClass temp;
+    if(loadScoresFile(path, temp))
+    {
+        ui->cls = temp;
+        ui->hasClass = true;
+    }
+    if(ui->hasClass)
+{
+    std::cout << "Students: "
+              << ui->cls.getStudentsLength()
+              << std::endl;
+
+    std::cout << "Class lab avg: "
+              << ui->cls.getClassLabScore()
+              << std::endl;
+}
+
 }
 
 
