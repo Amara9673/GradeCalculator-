@@ -18,6 +18,8 @@ public:
     void run(GtkApplication *app);
 
 private:
+    int sortMode;
+
     BarCtx barCtx;
 
     // ---- core widgets ----
@@ -57,12 +59,18 @@ private:
     void setLabel(GtkWidget *label, const char *msg);
     void setText(const std::string& text);
     void swapCenter(GtkWidget *newCenter);
+    std::string buildStudentSummary();
+
+
 
     // ---- page builders ----
     GtkWidget* makeLogin(GtkWidget *win);
     GtkWidget* makeMain(GtkWidget *win);
 
     // ---- callbacks ----
+
+    static void sortStudents(GtkButton *button, gpointer user_data);
+
     static void tryLogin(GtkButton *button, gpointer user_data);
 
     static void pickFile(GtkButton *btn, gpointer data);

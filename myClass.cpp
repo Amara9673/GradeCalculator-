@@ -254,7 +254,7 @@ void myClass::sortGrade(){
             students.at(j) = students.at(j-1);
             students.at(j-1) = mid;
 
-            j++;
+            j--;
         }
     }
 }

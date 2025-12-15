@@ -3,6 +3,7 @@
 
 #include <fstream>
 #include <sstream>
+#include <iomanip>
 #include <gdk-pixbuf/gdk-pixbuf.h>
 
 #include "authentication.h"
@@ -15,6 +16,12 @@
 AppUI::AppUI()
 {
     hasClass = false;
+
+    sortMode = 0; // 0=id, 1=letter, 2=overall %
+
+    // bar chart context
+    barCtx.cls = NULL;
+    barCtx.studentIndex = 0;
 
     // starting values
     window   = NULL;
@@ -38,14 +45,10 @@ AppUI::AppUI()
     fileText  = NULL;
     curFile   = "";
 
-    // center swap support (text scroll <-> chart)
-    centerWidget = NULL;     // current center widget (scroll or chart frame)
-    rightBox     = NULL;     // container holding the top row + center widget
-    textScroll   = NULL;     // persistent scrolled window holding textBox
-
-    // bar chart context
-    barCtx.cls = NULL;
-    barCtx.studentIndex = 0;
+    // center swap support
+    rightBox      = NULL;
+    centerWidget  = NULL;
+    textScroll    = NULL;
 }
 
 
@@ -62,61 +65,123 @@ void AppUI::setText(const std::string& text)
 {
     if (textBox == NULL) return;
 
+    // if textBox was destroyed due to swapping, GTK_IS_TEXT_VIEW will fail.
+    if (!GTK_IS_TEXT_VIEW(textBox)) return;
+
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(textBox));
+    if (buf == NULL) return;
 
     if (g_utf8_validate(text.c_str(), -1, NULL))
         gtk_text_buffer_set_text(buf, text.c_str(), -1);
     else
-        gtk_text_buffer_set_text(buf, "could not display file\n", -1);
+        gtk_text_buffer_set_text(buf, "could not display text\n", -1);
 }
 
 
 // helper: swap the center widget inside rightBox
 void AppUI::swapCenter(GtkWidget *newCenter)
 {
-    if (rightBox == NULL) return;
-    if (newCenter == NULL) return;
-    if (!GTK_IS_WIDGET(newCenter)) return;
-
-    // If newCenter already has a parent, handle it safely
-    GtkWidget *newParent = gtk_widget_get_parent(newCenter);
-
-    // If it's already the active center widget, do nothing
-    if (newCenter == centerWidget && newParent == rightBox)
+    if (rightBox == NULL || newCenter == NULL)
         return;
 
-    // Remove current center only if it is actually inside rightBox
-    if (centerWidget != NULL && GTK_IS_WIDGET(centerWidget))
-    {
-        GtkWidget *curParent = gtk_widget_get_parent(centerWidget);
-        if (curParent == rightBox)
-            gtk_box_remove(GTK_BOX(rightBox), centerWidget);
-    }
+    if (centerWidget != NULL && centerWidget != newCenter)
+        gtk_box_remove(GTK_BOX(rightBox), centerWidget);
 
-    // If newCenter is parented somewhere else, remove it from that container first
-    if (newParent != NULL && newParent != rightBox)
-    {
-        if (GTK_IS_BOX(newParent))
-            gtk_box_remove(GTK_BOX(newParent), newCenter);
-        else
-            gtk_widget_unparent(newCenter);
-    }
-
-    // If it's not already in rightBox, append it
-    newParent = gtk_widget_get_parent(newCenter);
-    if (newParent != rightBox)
+    // if it's already parented, don't re-append
+    if (gtk_widget_get_parent(newCenter) == NULL)
         gtk_box_append(GTK_BOX(rightBox), newCenter);
 
     centerWidget = newCenter;
 }
 
 
+// builds a student summary string for the text view
+std::string AppUI::buildStudentSummary()
+
+{
+    if (!hasClass)
+        return "Load a scores file first.\n";
+
+    std::ostringstream out;
+
+    out << "Students: " << cls.getStudentsLength() << "\n";
+    out << std::fixed << std::setprecision(1);
+
+    out << "Class Averages (percent):\n";
+    out << "  Labs:    " << cls.getClassLabScore() << "\n";
+    out << "  Quizzes: " << cls.getClassQuizScore() << "\n";
+    out << "  Midterm: " << cls.getClassMidtermScore() << "\n";
+    out << "  Project: " << cls.getClassProjectScore() << "\n";
+    out << "  Final:   " << cls.getClassFinalScore() << "\n";
+    out << "\n";
+
+    out << "ID        Letter  Overall%   Labs%   Quiz%   Mid%   Proj%  Final%\n";
+    out << "------------------------------------------------------------------\n";
+
+    for (int i = 0; i < cls.getStudentsLength(); i++)
+    {
+        int id = cls.getStudent(i).getID();
+        std::string letter = cls.getLetter(i);
+        double overall = cls.getTotalScore(i);
+
+        out << std::setw(9) << std::setfill('0') << id << std::setfill(' ')
+            << "   " << std::setw(2) << letter
+            << "     " << std::setw(7) << overall
+            << "   " << std::setw(6) << cls.getLabScore(i)
+            << " "  << std::setw(6) << cls.getQuizScore(i)
+            << " "  << std::setw(6) << cls.getMidtermScore(i)
+            << " "  << std::setw(6) << cls.getProjectScore(i)
+            << " "  << std::setw(6) << cls.getFinalScore(i)
+            << "\n";
+    }
+
+    return out.str();
+}
+
+
+// SORTING button callback
+void AppUI::sortStudents(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    AppUI *ui = static_cast<AppUI*>(user_data);
+
+    if (!ui->hasClass)
+    {
+        ui->setLabel(ui->fileText, "Load a scores file first.");
+        return;
+    }
+
+    // cycle mode: 0 -> 1 -> 2 -> 0 ...
+    ui->sortMode = (ui->sortMode + 1) % 3;
+
+    if (ui->sortMode == 0)
+    {
+        ui->cls.sortID();
+        ui->setLabel(ui->fileText, "Sorting by ID");
+    }
+    else if (ui->sortMode == 1)
+    {
+        ui->cls.sortLetter();
+        ui->setLabel(ui->fileText, "Sorting by Letter Grade");
+    }
+    else
+    {
+        ui->cls.sortGrade();
+        ui->setLabel(ui->fileText, "Sorting by Overall Percentage");
+    }
+
+    // ensure the text scroll is visible, then show sorted summary
+    if (ui->textScroll != NULL)
+        ui->swapCenter(ui->textScroll);
+
+    ui->setText(ui->buildStudentSummary());
+}
+
 
 // open file dialog
 void AppUI::pickFile(GtkButton *btn, gpointer data)
 {
     (void)btn;
-
     AppUI *ui = static_cast<AppUI*>(data);
 
     GtkFileDialog *dialog = gtk_file_dialog_new();
@@ -144,7 +209,7 @@ void AppUI::pickedFile(GObject *source, GAsyncResult *res, gpointer data)
     AppUI *ui = static_cast<AppUI*>(data);
 
     GFile *file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), res, NULL);
-    if (file == NULL) return; // user cancelled
+    if (file == NULL) return; // cancelled
 
     char *path = g_file_get_path(file);
     g_object_unref(file);
@@ -160,7 +225,6 @@ void AppUI::pickedFile(GObject *source, GAsyncResult *res, gpointer data)
         ui->setLabel(ui->fileText, "Pick a .txt scores file");
         ui->setText("that file is not a .txt\n");
         ui->hasClass = false;
-
         ui->barCtx.cls = NULL;
         ui->barCtx.studentIndex = 0;
         return;
@@ -169,7 +233,7 @@ void AppUI::pickedFile(GObject *source, GAsyncResult *res, gpointer data)
     std::string labeltxt = "Selected: " + ui->curFile;
     ui->setLabel(ui->fileText, labeltxt.c_str());
 
-    // read file into display
+    // read file into display (raw)
     std::ifstream in(ui->curFile.c_str());
     std::string line;
     std::string contents;
@@ -184,18 +248,15 @@ void AppUI::pickedFile(GObject *source, GAsyncResult *res, gpointer data)
         contents = "could not open that file\n";
     }
 
-    ui->setText(contents);
-
-    // load class data
+    // load class data using your loader :contentReference[oaicite:1]{index=1}
     myClass temp;
     if (loadScoresFile(ui->curFile, temp))
     {
         ui->cls = temp;
         ui->hasClass = true;
 
-        // bar chart context now points to loaded class
         ui->barCtx.cls = &ui->cls;
-        ui->barCtx.studentIndex = 0; // default: first student
+        ui->barCtx.studentIndex = 0;
 
         std::cout << "Students: " << ui->cls.getStudentsLength() << std::endl;
         std::cout << "Class lab avg: " << ui->cls.getClassLabScore() << std::endl;
@@ -207,12 +268,11 @@ void AppUI::pickedFile(GObject *source, GAsyncResult *res, gpointer data)
         ui->barCtx.studentIndex = 0;
     }
 
-    // go back to the text display area after loading a new file
+    // default behavior: go back to raw file text view
     if (ui->textScroll != NULL)
-    {
         ui->swapCenter(ui->textScroll);
-    }
 
+    ui->setText(contents);
 }
 
 
@@ -220,7 +280,6 @@ void AppUI::pickedFile(GObject *source, GAsyncResult *res, gpointer data)
 void AppUI::pickAvatar(GtkButton *btn, gpointer data)
 {
     (void)btn;
-
     AppUI *ui = static_cast<AppUI*>(data);
 
     GtkFileDialog *dialog = gtk_file_dialog_new();
@@ -236,7 +295,7 @@ void AppUI::pickedAvatar(GObject *source, GAsyncResult *res, gpointer data)
     AppUI *ui = static_cast<AppUI*>(data);
 
     GFile *file = gtk_file_dialog_open_finish(GTK_FILE_DIALOG(source), res, NULL);
-    if (file == NULL) return; // user cancelled
+    if (file == NULL) return;
 
     char *path = g_file_get_path(file);
     g_object_unref(file);
@@ -244,7 +303,6 @@ void AppUI::pickedAvatar(GObject *source, GAsyncResult *res, gpointer data)
 
     ui->avatarFile = path;
 
-    // load image
     GError *err = NULL;
     GdkPixbuf *pix = gdk_pixbuf_new_from_file(path, &err);
 
@@ -256,7 +314,6 @@ void AppUI::pickedAvatar(GObject *source, GAsyncResult *res, gpointer data)
         return;
     }
 
-    // scale to square
     GdkPixbuf *scaled =
         gdk_pixbuf_scale_simple(pix, AVATAR_BOX, AVATAR_BOX, GDK_INTERP_BILINEAR);
 
@@ -282,7 +339,6 @@ void AppUI::pickedAvatar(GObject *source, GAsyncResult *res, gpointer data)
 void AppUI::tryLogin(GtkButton *button, gpointer user_data)
 {
     (void)button;
-
     AppUI *ui = static_cast<AppUI*>(user_data);
 
     const char *u = gtk_editable_get_text(GTK_EDITABLE(ui->userIn));
@@ -324,7 +380,6 @@ void AppUI::showPie(GtkButton *button, gpointer user_data)
         return;
     }
 
-    // drawing area
     GtkWidget *area = gtk_drawing_area_new();
     gtk_widget_set_hexpand(area, TRUE);
     gtk_widget_set_vexpand(area, TRUE);
@@ -347,7 +402,7 @@ void AppUI::showPie(GtkButton *button, gpointer user_data)
 }
 
 
-// show bar chart
+// show bar chart (student 0 vs class avg by default)
 void AppUI::showBar(GtkButton *button, gpointer user_data)
 {
     (void)button;
@@ -363,7 +418,6 @@ void AppUI::showBar(GtkButton *button, gpointer user_data)
     gtk_widget_set_hexpand(area, TRUE);
     gtk_widget_set_vexpand(area, TRUE);
 
-    // IMPORTANT: pass BarCtx*, not &ui->cls
     gtk_drawing_area_set_draw_func(
         GTK_DRAWING_AREA(area),
         drawBarChart,
@@ -382,7 +436,7 @@ void AppUI::showBar(GtkButton *button, gpointer user_data)
 }
 
 
-// builds the login screen (UNCHANGED)
+// builds the login screen
 GtkWidget* AppUI::makeLogin(GtkWidget *win)
 {
     GtkWidget *page = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
@@ -445,7 +499,6 @@ GtkWidget* AppUI::makeLogin(GtkWidget *win)
     gtk_box_append(GTK_BOX(right), login_btn);
 
     g_signal_connect(login_btn, "clicked", G_CALLBACK(AppUI::tryLogin), this);
-
     gtk_window_set_default_widget(GTK_WINDOW(win), login_btn);
 
     gtk_box_append(GTK_BOX(page), left);
@@ -455,9 +508,11 @@ GtkWidget* AppUI::makeLogin(GtkWidget *win)
 }
 
 
-// builds the main screen (same layout; connects Bar/Pie buttons properly)
+// builds the main screen
 GtkWidget* AppUI::makeMain(GtkWidget *win)
 {
+    (void)win;
+
     mainBox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
     gtk_widget_set_margin_top(mainBox, 20);
     gtk_widget_set_margin_bottom(mainBox, 20);
@@ -488,7 +543,10 @@ GtkWidget* AppUI::makeMain(GtkWidget *win)
     g_signal_connect(avatarbtn, "clicked", G_CALLBACK(AppUI::pickAvatar), this);
     gtk_box_append(GTK_BOX(sidebar), avatarbtn);
 
-    gtk_box_append(GTK_BOX(sidebar), gtk_button_new_with_label("Sorting"));
+    // Sorting button (cycles: ID -> Letter -> Overall%)
+    GtkWidget *sortBtn = gtk_button_new_with_label("Sorting");
+    g_signal_connect(sortBtn, "clicked", G_CALLBACK(AppUI::sortStudents), this);
+    gtk_box_append(GTK_BOX(sidebar), sortBtn);
 
     GtkWidget *barBtn = gtk_button_new_with_label("Bar Chart");
     g_signal_connect(barBtn, "clicked", G_CALLBACK(AppUI::showBar), this);
@@ -501,8 +559,6 @@ GtkWidget* AppUI::makeMain(GtkWidget *win)
     GtkWidget *testbtn = gtk_button_new_with_label("Click Me");
     g_signal_connect(testbtn, "clicked", G_CALLBACK(AppUI::testClick), NULL);
     gtk_box_append(GTK_BOX(sidebar), testbtn);
-
-    gtk_window_set_default_widget(GTK_WINDOW(win), choosebtn);
 
     gtk_box_append(GTK_BOX(mainBox), sidebar_wrap);
 
@@ -532,6 +588,7 @@ GtkWidget* AppUI::makeMain(GtkWidget *win)
 
     gtk_box_append(GTK_BOX(toprow), avatarFrame);
 
+    // Create text widgets ONCE and keep references so swapping doesn't destroy them
     textBox = gtk_text_view_new();
     gtk_text_view_set_editable(GTK_TEXT_VIEW(textBox), FALSE);
     gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(textBox), FALSE);
@@ -542,9 +599,12 @@ GtkWidget* AppUI::makeMain(GtkWidget *win)
     gtk_widget_add_css_class(textScroll, "display-area");
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(textScroll), textBox);
 
+    // Keep them alive even if removed from the box (prevents dangling pointer crash)
+    g_object_ref(textBox);
+    g_object_ref(textScroll);
+
     gtk_box_append(GTK_BOX(rightBox), textScroll);
     centerWidget = textScroll;
-
 
     gtk_box_append(GTK_BOX(mainBox), rightBox);
 
@@ -552,7 +612,7 @@ GtkWidget* AppUI::makeMain(GtkWidget *win)
 }
 
 
-// builds the whole window + stack pages (UNCHANGED)
+// builds the whole window + stack pages
 void AppUI::run(GtkApplication *app)
 {
     window = gtk_application_window_new(app);
