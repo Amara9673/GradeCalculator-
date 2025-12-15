@@ -1,12 +1,14 @@
 #include "ui.h"
 #include "load.h"
 
-
 #include <fstream>
 #include <sstream>
 #include <gdk-pixbuf/gdk-pixbuf.h>
+
 #include "authentication.h"
 #include "theme.h"
+#include "chart.h"
+
 #include <iostream>
 
 
@@ -14,27 +16,31 @@ AppUI::AppUI()
 {
     hasClass = false;
 
-    //starting values
+    // starting values
     window   = NULL;
     stack    = NULL;
     loginBox = NULL;
     mainBox  = NULL;
 
-    //login widgets
+    // login widgets
     userIn   = NULL;
     passIn   = NULL;
     loginMsg = NULL;
 
-    //avatar stuff
+    // avatar stuff
     avatarFrame  = NULL;
     avatarImg    = NULL;
     noAvatarText = NULL;
     avatarFile   = "";
 
-    //file display stuff
-    textBox = NULL;
-    fileText = NULL;
-    curFile = "";
+    // file display stuff
+    textBox   = NULL;
+    fileText  = NULL;
+    curFile   = "";
+
+    // center swap support (text scroll <-> chart)
+    centerWidget = NULL;     // current center widget (scroll or chart frame)
+    rightBox     = NULL;     // container holding the top row + center widget
 }
 
 
@@ -42,9 +48,7 @@ AppUI::AppUI()
 void AppUI::setLabel(GtkWidget *label, const char *msg)
 {
     if (label != NULL)
-    {
         gtk_label_set_text(GTK_LABEL(label), msg);
-    }
 }
 
 
@@ -56,13 +60,23 @@ void AppUI::setText(const std::string& text)
     GtkTextBuffer *buf = gtk_text_view_get_buffer(GTK_TEXT_VIEW(textBox));
 
     if (g_utf8_validate(text.c_str(), -1, NULL))
-    {
         gtk_text_buffer_set_text(buf, text.c_str(), -1);
-    }
     else
-    {
         gtk_text_buffer_set_text(buf, "could not display file\n", -1);
-    }
+}
+
+
+// helper: swap the center widget inside rightBox
+void AppUI::swapCenter(GtkWidget *newCenter)
+{
+    if (rightBox == NULL || newCenter == NULL)
+        return;
+
+    if (centerWidget != NULL)
+        gtk_box_remove(GTK_BOX(rightBox), centerWidget);
+
+    gtk_box_append(GTK_BOX(rightBox), newCenter);
+    centerWidget = newCenter;
 }
 
 
@@ -113,6 +127,7 @@ void AppUI::pickedFile(GObject *source, GAsyncResult *res, gpointer data)
     {
         ui->setLabel(ui->fileText, "Pick a .txt scores file");
         ui->setText("that file is not a .txt\n");
+        ui->hasClass = false;
         return;
     }
 
@@ -135,24 +150,42 @@ void AppUI::pickedFile(GObject *source, GAsyncResult *res, gpointer data)
     }
 
     ui->setText(contents);
-        // load class data
+
+    // IMPORTANT FIX:
+    // old code called loadScoresFile(path, ...) after freeing path.
+    // use ui->curFile instead.
     myClass temp;
-    if(loadScoresFile(path, temp))
+    if (loadScoresFile(ui->curFile, temp))
     {
         ui->cls = temp;
         ui->hasClass = true;
+
+        std::cout << "Students: " << ui->cls.getStudentsLength() << std::endl;
+        std::cout << "Class lab avg: " << ui->cls.getClassLabScore() << std::endl;
     }
-    if(ui->hasClass)
-{
-    std::cout << "Students: "
-              << ui->cls.getStudentsLength()
-              << std::endl;
+    else
+    {
+        ui->hasClass = false;
+    }
 
-    std::cout << "Class lab avg: "
-              << ui->cls.getClassLabScore()
-              << std::endl;
-}
+    // when a file is chosen, default back to text display area (your original behavior)
+    if (ui->centerWidget != NULL && GTK_IS_WIDGET(ui->centerWidget))
+    {
+        // ensure the scroll/text view is shown again if charts were open
+        // centerWidget is swapped below in makeMain, so we just rebuild the scroll if needed
+        // (only do this if textBox exists)
+        // If current centerWidget isn't the scroll, swap back.
+        if (!GTK_IS_SCROLLED_WINDOW(ui->centerWidget))
+        {
+            GtkWidget *scroll = gtk_scrolled_window_new();
+            gtk_widget_set_vexpand(scroll, TRUE);
+            gtk_widget_set_hexpand(scroll, TRUE);
+            gtk_widget_add_css_class(scroll, "display-area");
+            gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), ui->textBox);
 
+            ui->swapCenter(scroll);
+        }
+    }
 }
 
 
@@ -252,7 +285,77 @@ void AppUI::testClick(GtkButton *button, gpointer user_data)
 }
 
 
-// builds the login screen
+// show pie chart
+void AppUI::showPie(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    AppUI *ui = static_cast<AppUI*>(user_data);
+
+    if (!ui->hasClass)
+    {
+        ui->setLabel(ui->fileText, "Load a scores file first.");
+        return;
+    }
+
+    // drawing area
+    GtkWidget *area = gtk_drawing_area_new();
+    gtk_widget_set_hexpand(area, TRUE);
+    gtk_widget_set_vexpand(area, TRUE);
+
+    gtk_drawing_area_set_draw_func(
+        GTK_DRAWING_AREA(area),
+        drawPieChart,
+        &ui->cls,
+        NULL
+    );
+
+    // wrap in a "display-area" container so your white background stays consistent
+    GtkWidget *frame = gtk_frame_new(NULL);
+    gtk_widget_set_hexpand(frame, TRUE);
+    gtk_widget_set_vexpand(frame, TRUE);
+    gtk_widget_add_css_class(frame, "display-area");
+    gtk_frame_set_child(GTK_FRAME(frame), area);
+
+    ui->swapCenter(frame);
+    gtk_widget_queue_draw(area);
+}
+
+
+// show bar chart
+void AppUI::showBar(GtkButton *button, gpointer user_data)
+{
+    (void)button;
+    AppUI *ui = static_cast<AppUI*>(user_data);
+
+    if (!ui->hasClass)
+    {
+        ui->setLabel(ui->fileText, "Load a scores file first.");
+        return;
+    }
+
+    GtkWidget *area = gtk_drawing_area_new();
+    gtk_widget_set_hexpand(area, TRUE);
+    gtk_widget_set_vexpand(area, TRUE);
+
+    gtk_drawing_area_set_draw_func(
+        GTK_DRAWING_AREA(area),
+        drawBarChart,
+        &ui->cls,
+        NULL
+    );
+
+    GtkWidget *frame = gtk_frame_new(NULL);
+    gtk_widget_set_hexpand(frame, TRUE);
+    gtk_widget_set_vexpand(frame, TRUE);
+    gtk_widget_add_css_class(frame, "display-area");
+    gtk_frame_set_child(GTK_FRAME(frame), area);
+
+    ui->swapCenter(frame);
+    gtk_widget_queue_draw(area);
+}
+
+
+// builds the login screen (UNCHANGED)
 GtkWidget* AppUI::makeLogin(GtkWidget *win)
 {
     GtkWidget *page = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
@@ -325,7 +428,7 @@ GtkWidget* AppUI::makeLogin(GtkWidget *win)
 }
 
 
-// builds the main screen
+// builds the main screen (same layout; connects Bar/Pie buttons properly)
 GtkWidget* AppUI::makeMain(GtkWidget *win)
 {
     mainBox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
@@ -359,8 +462,14 @@ GtkWidget* AppUI::makeMain(GtkWidget *win)
     gtk_box_append(GTK_BOX(sidebar), avatarbtn);
 
     gtk_box_append(GTK_BOX(sidebar), gtk_button_new_with_label("Sorting"));
-    gtk_box_append(GTK_BOX(sidebar), gtk_button_new_with_label("Bar Chart"));
-    gtk_box_append(GTK_BOX(sidebar), gtk_button_new_with_label("Pie Chart"));
+
+    GtkWidget *barBtn = gtk_button_new_with_label("Bar Chart");
+    g_signal_connect(barBtn, "clicked", G_CALLBACK(AppUI::showBar), this);
+    gtk_box_append(GTK_BOX(sidebar), barBtn);
+
+    GtkWidget *pieBtn = gtk_button_new_with_label("Pie Chart");
+    g_signal_connect(pieBtn, "clicked", G_CALLBACK(AppUI::showPie), this);
+    gtk_box_append(GTK_BOX(sidebar), pieBtn);
 
     GtkWidget *testbtn = gtk_button_new_with_label("Click Me");
     g_signal_connect(testbtn, "clicked", G_CALLBACK(AppUI::testClick), NULL);
@@ -370,11 +479,12 @@ GtkWidget* AppUI::makeMain(GtkWidget *win)
 
     gtk_box_append(GTK_BOX(mainBox), sidebar_wrap);
 
-    GtkWidget *rightbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
-    gtk_widget_add_css_class(rightbox, "content");
+    // RIGHT CONTENT
+    rightBox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 10);
+    gtk_widget_add_css_class(rightBox, "content");
 
     GtkWidget *toprow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 10);
-    gtk_box_append(GTK_BOX(rightbox), toprow);
+    gtk_box_append(GTK_BOX(rightBox), toprow);
 
     fileText = gtk_label_new("Selected: (none)");
     gtk_widget_set_hexpand(fileText, TRUE);
@@ -405,14 +515,16 @@ GtkWidget* AppUI::makeMain(GtkWidget *win)
     gtk_widget_add_css_class(scroll, "display-area");
     gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), textBox);
 
-    gtk_box_append(GTK_BOX(rightbox), scroll);
-    gtk_box_append(GTK_BOX(mainBox), rightbox);
+    gtk_box_append(GTK_BOX(rightBox), scroll);
+    centerWidget = scroll;
+
+    gtk_box_append(GTK_BOX(mainBox), rightBox);
 
     return mainBox;
 }
 
 
-// builds the whole window + stack pages
+// builds the whole window + stack pages (UNCHANGED)
 void AppUI::run(GtkApplication *app)
 {
     window = gtk_application_window_new(app);

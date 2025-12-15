@@ -3,64 +3,72 @@
 
 #include <gtk/gtk.h>
 #include <string>
+
 #include "myClass.h"
 
+// avatar size (matches your UI usage)
+const int AVATAR_BOX = 64;
 
-class AppUI {
+class AppUI
+{
 public:
     AppUI();
-
-    // runs the whole app window
     void run(GtkApplication *app);
 
 private:
-    myClass cls;
-    bool hasClass;
-
-    // screens
+    // ---- core widgets ----
+    GtkWidget *window;
     GtkStack  *stack;
+
     GtkWidget *loginBox;
     GtkWidget *mainBox;
 
-    // window
-    GtkWidget *window;
-
-    // login widgets
+    // ---- login widgets ----
     GtkWidget *userIn;
     GtkWidget *passIn;
     GtkWidget *loginMsg;
 
-    // avatar widgets
+    // ---- avatar widgets ----
     GtkWidget *avatarFrame;
     GtkWidget *avatarImg;
     GtkWidget *noAvatarText;
     std::string avatarFile;
-    static const int AVATAR_BOX = 120;
 
-    // file display widgets
+    // ---- file display widgets ----
     GtkWidget *textBox;
     GtkWidget *fileText;
     std::string curFile;
 
-    // small helpers
-    void setText(const std::string& text);
-    void setLabel(GtkWidget *label, const char *msg);
+    // ---- center swap support ----
+    GtkWidget *rightBox;       // container for top row + center content
+    GtkWidget *centerWidget;   // current center widget (scroll/chart)
 
-    // file picker callbacks
+    // ---- class data ----
+    myClass cls;
+    bool hasClass;
+
+    // ---- helpers ----
+    void setLabel(GtkWidget *label, const char *msg);
+    void setText(const std::string& text);
+    void swapCenter(GtkWidget *newCenter);
+
+    // ---- page builders ----
+    GtkWidget* makeLogin(GtkWidget *win);
+    GtkWidget* makeMain(GtkWidget *win);
+
+    // ---- callbacks ----
+    static void tryLogin(GtkButton *button, gpointer user_data);
+
     static void pickFile(GtkButton *btn, gpointer data);
     static void pickedFile(GObject *source, GAsyncResult *res, gpointer data);
 
-    // avatar picker callbacks
     static void pickAvatar(GtkButton *btn, gpointer data);
     static void pickedAvatar(GObject *source, GAsyncResult *res, gpointer data);
 
-    // button callbacks
-    static void tryLogin(GtkButton *button, gpointer user_data);
     static void testClick(GtkButton *button, gpointer user_data);
 
-    // build each screen
-    GtkWidget* makeLogin(GtkWidget *window);
-    GtkWidget* makeMain(GtkWidget *window);
+    static void showBar(GtkButton *button, gpointer user_data);
+    static void showPie(GtkButton *button, gpointer user_data);
 };
 
 #endif
