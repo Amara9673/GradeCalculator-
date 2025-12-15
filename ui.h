@@ -79,7 +79,7 @@ private:
     static void pickAvatar(GtkButton *btn, gpointer data);
     static void pickedAvatar(GObject *source, GAsyncResult *res, gpointer data);
 
-    static void testClick(GtkButton *button, gpointer user_data);
+
 
     static void showBar(GtkButton *button, gpointer user_data);
     static void showPie(GtkButton *button, gpointer user_data);

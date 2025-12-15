@@ -359,13 +359,7 @@ void AppUI::tryLogin(GtkButton *button, gpointer user_data)
 }
 
 
-// test button callback
-void AppUI::testClick(GtkButton *button, gpointer user_data)
-{
-    (void)button;
-    (void)user_data;
-    g_print("Button was clicked!\n");
-}
+
 
 
 // show pie chart
@@ -556,9 +550,6 @@ GtkWidget* AppUI::makeMain(GtkWidget *win)
     g_signal_connect(pieBtn, "clicked", G_CALLBACK(AppUI::showPie), this);
     gtk_box_append(GTK_BOX(sidebar), pieBtn);
 
-    GtkWidget *testbtn = gtk_button_new_with_label("Click Me");
-    g_signal_connect(testbtn, "clicked", G_CALLBACK(AppUI::testClick), NULL);
-    gtk_box_append(GTK_BOX(sidebar), testbtn);
 
     gtk_box_append(GTK_BOX(mainBox), sidebar_wrap);
 
@@ -616,7 +607,7 @@ GtkWidget* AppUI::makeMain(GtkWidget *win)
 void AppUI::run(GtkApplication *app)
 {
     window = gtk_application_window_new(app);
-    gtk_window_set_title(GTK_WINDOW(window), "Grade Calculator Practice");
+    gtk_window_set_title(GTK_WINDOW(window), "Grade Calculator");
     gtk_window_set_default_size(GTK_WINDOW(window), 800, 500);
     gtk_window_set_resizable(GTK_WINDOW(window), FALSE);
 
