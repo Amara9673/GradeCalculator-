@@ -41,6 +41,11 @@ AppUI::AppUI()
     // center swap support (text scroll <-> chart)
     centerWidget = NULL;     // current center widget (scroll or chart frame)
     rightBox     = NULL;     // container holding the top row + center widget
+    textScroll   = NULL;     // persistent scrolled window holding textBox
+
+    // bar chart context
+    barCtx.cls = NULL;
+    barCtx.studentIndex = 0;
 }
 
 
@@ -69,15 +74,42 @@ void AppUI::setText(const std::string& text)
 // helper: swap the center widget inside rightBox
 void AppUI::swapCenter(GtkWidget *newCenter)
 {
-    if (rightBox == NULL || newCenter == NULL)
+    if (rightBox == NULL) return;
+    if (newCenter == NULL) return;
+    if (!GTK_IS_WIDGET(newCenter)) return;
+
+    // If newCenter already has a parent, handle it safely
+    GtkWidget *newParent = gtk_widget_get_parent(newCenter);
+
+    // If it's already the active center widget, do nothing
+    if (newCenter == centerWidget && newParent == rightBox)
         return;
 
-    if (centerWidget != NULL)
-        gtk_box_remove(GTK_BOX(rightBox), centerWidget);
+    // Remove current center only if it is actually inside rightBox
+    if (centerWidget != NULL && GTK_IS_WIDGET(centerWidget))
+    {
+        GtkWidget *curParent = gtk_widget_get_parent(centerWidget);
+        if (curParent == rightBox)
+            gtk_box_remove(GTK_BOX(rightBox), centerWidget);
+    }
 
-    gtk_box_append(GTK_BOX(rightBox), newCenter);
+    // If newCenter is parented somewhere else, remove it from that container first
+    if (newParent != NULL && newParent != rightBox)
+    {
+        if (GTK_IS_BOX(newParent))
+            gtk_box_remove(GTK_BOX(newParent), newCenter);
+        else
+            gtk_widget_unparent(newCenter);
+    }
+
+    // If it's not already in rightBox, append it
+    newParent = gtk_widget_get_parent(newCenter);
+    if (newParent != rightBox)
+        gtk_box_append(GTK_BOX(rightBox), newCenter);
+
     centerWidget = newCenter;
 }
+
 
 
 // open file dialog
@@ -128,6 +160,9 @@ void AppUI::pickedFile(GObject *source, GAsyncResult *res, gpointer data)
         ui->setLabel(ui->fileText, "Pick a .txt scores file");
         ui->setText("that file is not a .txt\n");
         ui->hasClass = false;
+
+        ui->barCtx.cls = NULL;
+        ui->barCtx.studentIndex = 0;
         return;
     }
 
@@ -151,14 +186,16 @@ void AppUI::pickedFile(GObject *source, GAsyncResult *res, gpointer data)
 
     ui->setText(contents);
 
-    // IMPORTANT FIX:
-    // old code called loadScoresFile(path, ...) after freeing path.
-    // use ui->curFile instead.
+    // load class data
     myClass temp;
     if (loadScoresFile(ui->curFile, temp))
     {
         ui->cls = temp;
         ui->hasClass = true;
+
+        // bar chart context now points to loaded class
+        ui->barCtx.cls = &ui->cls;
+        ui->barCtx.studentIndex = 0; // default: first student
 
         std::cout << "Students: " << ui->cls.getStudentsLength() << std::endl;
         std::cout << "Class lab avg: " << ui->cls.getClassLabScore() << std::endl;
@@ -166,26 +203,16 @@ void AppUI::pickedFile(GObject *source, GAsyncResult *res, gpointer data)
     else
     {
         ui->hasClass = false;
+        ui->barCtx.cls = NULL;
+        ui->barCtx.studentIndex = 0;
     }
 
-    // when a file is chosen, default back to text display area (your original behavior)
-    if (ui->centerWidget != NULL && GTK_IS_WIDGET(ui->centerWidget))
+    // go back to the text display area after loading a new file
+    if (ui->textScroll != NULL)
     {
-        // ensure the scroll/text view is shown again if charts were open
-        // centerWidget is swapped below in makeMain, so we just rebuild the scroll if needed
-        // (only do this if textBox exists)
-        // If current centerWidget isn't the scroll, swap back.
-        if (!GTK_IS_SCROLLED_WINDOW(ui->centerWidget))
-        {
-            GtkWidget *scroll = gtk_scrolled_window_new();
-            gtk_widget_set_vexpand(scroll, TRUE);
-            gtk_widget_set_hexpand(scroll, TRUE);
-            gtk_widget_add_css_class(scroll, "display-area");
-            gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), ui->textBox);
-
-            ui->swapCenter(scroll);
-        }
+        ui->swapCenter(ui->textScroll);
     }
+
 }
 
 
@@ -309,7 +336,6 @@ void AppUI::showPie(GtkButton *button, gpointer user_data)
         NULL
     );
 
-    // wrap in a "display-area" container so your white background stays consistent
     GtkWidget *frame = gtk_frame_new(NULL);
     gtk_widget_set_hexpand(frame, TRUE);
     gtk_widget_set_vexpand(frame, TRUE);
@@ -327,7 +353,7 @@ void AppUI::showBar(GtkButton *button, gpointer user_data)
     (void)button;
     AppUI *ui = static_cast<AppUI*>(user_data);
 
-    if (!ui->hasClass)
+    if (!ui->hasClass || ui->barCtx.cls == NULL)
     {
         ui->setLabel(ui->fileText, "Load a scores file first.");
         return;
@@ -337,10 +363,11 @@ void AppUI::showBar(GtkButton *button, gpointer user_data)
     gtk_widget_set_hexpand(area, TRUE);
     gtk_widget_set_vexpand(area, TRUE);
 
+    // IMPORTANT: pass BarCtx*, not &ui->cls
     gtk_drawing_area_set_draw_func(
         GTK_DRAWING_AREA(area),
         drawBarChart,
-        &ui->cls,
+        &ui->barCtx,
         NULL
     );
 
@@ -509,14 +536,15 @@ GtkWidget* AppUI::makeMain(GtkWidget *win)
     gtk_text_view_set_editable(GTK_TEXT_VIEW(textBox), FALSE);
     gtk_text_view_set_cursor_visible(GTK_TEXT_VIEW(textBox), FALSE);
 
-    GtkWidget *scroll = gtk_scrolled_window_new();
-    gtk_widget_set_vexpand(scroll, TRUE);
-    gtk_widget_set_hexpand(scroll, TRUE);
-    gtk_widget_add_css_class(scroll, "display-area");
-    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroll), textBox);
+    textScroll = gtk_scrolled_window_new();
+    gtk_widget_set_vexpand(textScroll, TRUE);
+    gtk_widget_set_hexpand(textScroll, TRUE);
+    gtk_widget_add_css_class(textScroll, "display-area");
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(textScroll), textBox);
 
-    gtk_box_append(GTK_BOX(rightBox), scroll);
-    centerWidget = scroll;
+    gtk_box_append(GTK_BOX(rightBox), textScroll);
+    centerWidget = textScroll;
+
 
     gtk_box_append(GTK_BOX(mainBox), rightBox);
 

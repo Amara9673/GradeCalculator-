@@ -3,6 +3,8 @@
 
 #include <gtk/gtk.h>
 #include <string>
+#include "chart.h"
+
 
 #include "myClass.h"
 
@@ -16,6 +18,8 @@ public:
     void run(GtkApplication *app);
 
 private:
+    BarCtx barCtx;
+
     // ---- core widgets ----
     GtkWidget *window;
     GtkStack  *stack;
@@ -42,6 +46,8 @@ private:
     // ---- center swap support ----
     GtkWidget *rightBox;       // container for top row + center content
     GtkWidget *centerWidget;   // current center widget (scroll/chart)
+    GtkWidget *textScroll;   // persistent scrolled window holding textBox
+
 
     // ---- class data ----
     myClass cls;

@@ -1,118 +1,109 @@
 #include <fstream>
 #include <vector>
 #include <string>
+#include <algorithm>
 
 #include "load.h"
+#include "myClass.h"
+#include "student.h"
+#include "grade.h"
+
+static int max_in_block(const std::vector<int>& v, int start, int count)
+{
+    int m = 0;
+    for (int i = 0; i < count; i++)
+        m = std::max(m, v[start + i]);
+    return m;
+}
 
 bool loadScoresFile(const std::string& filename, myClass& cls)
 {
     std::ifstream in(filename);
-    if(!in)
+    if (!in)
         return false;
 
-    std::vector<int> weight(5);
-    std::vector<int> items(5);
-    std::vector<int> drops(5);
+    const int CATS = 5;
 
-    // read weights
-    for(int i = 0; i < 5; i++)
-        in >> weight[i];
+    // --- read weights, items, drops ---
+    std::vector<int> weight(CATS), items(CATS), drops(CATS);
 
-    // read item counts
-    for(int i = 0; i < 5; i++)
-        in >> items[i];
+    for (int i = 0; i < CATS; i++)
+        if (!(in >> weight[i])) return false;
 
-    // read drops
-    for(int i = 0; i < 5; i++)
-        in >> drops[i];
+    for (int i = 0; i < CATS; i++)
+        if (!(in >> items[i])) return false;
 
-    // read max scores by category
-    std::vector<int> maxLabs(items[0]);
-    std::vector<int> maxQuiz(items[1]);
-    std::vector<int> maxMid(items[2]);
-    std::vector<int> maxProj(items[3]);
-    std::vector<int> maxFinal(items[4]);
+    for (int i = 0; i < CATS; i++)
+        if (!(in >> drops[i])) return false;
 
-    for(int i = 0; i < items[0]; i++) in >> maxLabs[i];
-    for(int i = 0; i < items[1]; i++) in >> maxQuiz[i];
-    for(int i = 0; i < items[2]; i++) in >> maxMid[i];
-    for(int i = 0; i < items[3]; i++) in >> maxProj[i];
-    for(int i = 0; i < items[4]; i++) in >> maxFinal[i];
+    // total assessments per student (labs+quizzes+midterms+project+final)
+    int totalItems = 0;
+    for (int i = 0; i < CATS; i++)
+    {
+        if (items[i] < 0) return false;
+        totalItems += items[i];
+    }
+    if (totalItems <= 0) return false;
 
-    // flatten maxScore (myClass expects one vector)
-    std::vector<int> maxScore;
-    maxScore.insert(maxScore.end(), maxLabs.begin(), maxLabs.end());
-    maxScore.insert(maxScore.end(), maxQuiz.begin(), maxQuiz.end());
-    maxScore.insert(maxScore.end(), maxMid.begin(), maxMid.end());
-    maxScore.insert(maxScore.end(), maxProj.begin(), maxProj.end());
-    maxScore.insert(maxScore.end(), maxFinal.begin(), maxFinal.end());
+    // --- read ALL per-assessment max scores (keep stream aligned) ---
+    std::vector<int> maxAll(totalItems);
+    for (int i = 0; i < totalItems; i++)
+        if (!(in >> maxAll[i])) return false;
 
+    // Convert to ONE max per category (because your grade uses one maxScore per category)
+    std::vector<int> maxPerCat(CATS);
+    int off = 0;
+    for (int c = 0; c < CATS; c++)
+    {
+        if (items[c] == 0)
+            maxPerCat[c] = 0;
+        else
+            maxPerCat[c] = max_in_block(maxAll, off, items[c]);
+        off += items[c];
+    }
+
+    // --- store class metadata ---
     cls.setWeight(weight);
     cls.setItems(items);
     cls.setDrops(drops);
-    cls.setMaxScore(maxScore);
+    cls.setMaxScore(maxPerCat);
 
-        // read students
+    // --- read students ---
     std::vector<student> students;
 
-    while(true)
+    while (true)
     {
         int id;
-        in >> id;
-        if(!in)
-            break;
+        if (!(in >> id))
+            break; // normal EOF
 
-        student s(
-            id,
-            items[0], items[1], items[2], items[3], items[4],
-            maxLabs[0], maxQuiz[0], maxMid[0], maxProj[0], maxFinal[0],
-            weight[0], weight[1], weight[2], weight[3], weight[4]
-        );
+        std::vector<int> labs(items[0]), quizzes(items[1]),
+                         midterms(items[2]), projects(items[3]), finals(items[4]);
 
-        // labs
-        for(int i = 0; i < items[0]; i++)
-        {
-            int val;
-            in >> val;
-            s.getLab().setScore(val, i);
-        }
+        for (int i = 0; i < items[0]; i++) if (!(in >> labs[i])) return false;
+        for (int i = 0; i < items[1]; i++) if (!(in >> quizzes[i])) return false;
+        for (int i = 0; i < items[2]; i++) if (!(in >> midterms[i])) return false;
+        for (int i = 0; i < items[3]; i++) if (!(in >> projects[i])) return false;
+        for (int i = 0; i < items[4]; i++) if (!(in >> finals[i])) return false;
 
-        // quizzes
-        for(int i = 0; i < items[1]; i++)
-        {
-            int val;
-            in >> val;
-            s.getQuiz().setScore(val, i);
-        }
+        grade gLabs(labs,     maxPerCat[0], weight[0]);
+        grade gQuiz(quizzes,  maxPerCat[1], weight[1]);
+        grade gMid(midterms,  maxPerCat[2], weight[2]);
+        grade gProj(projects, maxPerCat[3], weight[3]);
+        grade gFinal(finals,  maxPerCat[4], weight[4]);
 
-        // midterms
-        for(int i = 0; i < items[2]; i++)
-        {
-            int val;
-            in >> val;
-            s.getMidterm().setScore(val, i);
-        }
+        student s(id, gLabs, gQuiz, gMid, gProj, gFinal);
 
-        // project
-        for(int i = 0; i < items[3]; i++)
-        {
-            int val;
-            in >> val;
-            s.getProject().setScore(val, i);
-        }
-
-        // final
-        for(int i = 0; i < items[4]; i++)
-        {
-            int val;
-            in >> val;
-            s.getFinal().setScore(val, i);
-        }
+        // apply drops per spec
+        if (drops[0] > 0) s.dropLabs(drops[0]);
+        if (drops[1] > 0) s.dropQuizzes(drops[1]);
+        if (drops[2] > 0) s.dropMidterms(drops[2]);
+        if (drops[3] > 0) s.dropProjects(drops[3]);
+        if (drops[4] > 0) s.dropFinals(drops[4]);
 
         students.push_back(s);
     }
 
-
     cls.setStudents(students);
-    return true;
+    return (cls.getStudentsLength() > 0);
 }
