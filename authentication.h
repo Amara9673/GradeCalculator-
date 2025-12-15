@@ -1,13 +1,11 @@
-#ifndef AUTHENTICATION
-#define AUTHENTICATION
+#ifndef AUTH_H
+#define AUTH_H
 
 #include <string>
 
-
-
-bool registration(std::string, std::string);
-bool loginCheck(std::string, std::string);
+bool registerUser(std::string, std::string);
+bool checkLogin(std::string, std::string);
 void login(bool& check);
-void registering();
+void makeAccount();
 
 #endif
